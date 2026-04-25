@@ -344,15 +344,22 @@ async function changeOptifineCape(email, password, mcid, onProgress) {
         console.log('✅ ログイン成功！');
 
         if (onProgress) await onProgress(85, 'マント編集ページへ移動中...');
-        await page.goto(`https://optifine.net/donationCapeEdit?capeId=${capeId}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await page.goto(`https://optifine.net/donationCapeEdit?capeId=${capeId}`, { waitUntil: 'commit', timeout: 60000 });
         await page.waitForSelector('input[type="submit"]', { state: 'visible', timeout: 30000 });
         
+        const editPageHtml = await page.content();
+        if (editPageHtml.match(/The cape can be moved after \d+h\./)) {
+            return { success: false, error: 'このアカウントはまだ24時間たってないため使用できません' };
+        }
+
         if (onProgress) await onProgress(95, 'マントの設定を保存中...');
         await page.evaluate(({ mcid }) => {
             document.querySelector('input[name="capeUsername"]').value = mcid;
             const checkbox = document.querySelector('input[name="capeLocked"]');
             if (checkbox && checkbox.checked) checkbox.checked = false;
         }, { mcid });
+
+        await page.screenshot({ path: '2_filled_page.png' });
 
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'commit', timeout: 60000 }).catch(() => {}),
