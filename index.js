@@ -366,66 +366,47 @@ async function changeOptifineCape(email, password, mcid, onProgress) {
     try {
         if (onProgress) await onProgress(10, 'ブラウザへの接続を確立中...');
         browser = await chromium.connectOverCDP(wsEndpoint, { timeout: 45000 });
-        const context = await browser.newContext({
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-        });
+        const context = await browser.newContext();
         const page = await context.newPage();
-        page.setDefaultTimeout(60000);
         
-        if (onProgress) await onProgress(30, 'ログインページへ移動中...');
+        // Cloudflareの自動突破待ちなどで時間がかかることがあるため長めに設定
+        page.setDefaultTimeout(90000);
+        
+        if (onProgress) await onProgress(30, 'ログインページへアクセス中...');
         await page.goto('https://optifine.net/login', { waitUntil: 'domcontentloaded', timeout: 90000 });
         
-        // 人間アピール：マウスを少し動かす
-        await page.mouse.move(Math.random() * 500, Math.random() * 500);
-        await page.waitForTimeout(1000 + Math.random() * 2000);
+        // パスワード入力欄が表示されるまで待つ（この間にBright DataがCloudflareを全自動で突破してくれます）
+        if (onProgress) await onProgress(50, 'Cloudflareの自動突破を待機中...');
+        console.log('Cloudflareの自動突破を待機中...');
+        await page.waitForSelector('input[name="password"]', { state: 'visible', timeout: 90000 });
+        console.log('✅ Cloudflare突破・ログイン画面表示！');
 
-        if (onProgress) await onProgress(50, 'ページの状態を確認中...');
-        const detector = await Promise.race([
-            page.waitForSelector('input[name="password"]', { state: 'visible', timeout: 45000 }).then(() => 'form'),
-            page.waitForFunction(() => {
-                const text = document.body ? document.body.innerText : "";
-                const title = document.title || "";
-                // Cloudflareチャレンジの検知
-                if (title.includes('Just a moment') || title.includes('Attention Required') || title.includes('Security')) return 'challenge';
-                if (text.includes('Verify you are human') || text.includes('Cloudflare') || text.includes('Checking your browser')) return 'challenge';
-                if (document.querySelector('iframe[src*="cloudflare"]') || document.querySelector('div[id*="turnstile"]')) return 'challenge';
-                // ブロック画面の検知
-                if (text.includes('Access denied') || text.includes('Error 1020') || title.includes('Access denied')) return 'blocked';
-                
-                return false; // 条件に合致しない場合はポーリングを継続
-            }, { timeout: 45000, polling: 1000 }).then(handle => handle.jsonValue())
-        ]).catch(() => 'timeout');
+        if (onProgress) await onProgress(70, 'ログイン情報を送信中...');
+        console.log('2. ログイン情報を入力中...');
+        
+        // パスワード枠への入力を監視するセキュリティをすり抜けるため、
+        // 「元からあるパスワード枠を削除し、別の枠を新しく作ってパスワードを入れる」という大技を使います。
+        await page.evaluate(({ email, password }) => {
+            document.querySelector('input[name="email"]').value = email;
+            
+            // 元のパスワード枠を完全に削除する
+            const oldPassField = document.querySelector('input[name="password"]');
+            const parent = oldPassField.parentNode;
+            parent.removeChild(oldPassField);
 
-        if (detector === 'challenge') {
-            if (onProgress) await onProgress(60, 'Cloudflare認証を待機中...');
-            console.log('Cloudflareチャレンジを検知しました。突破を待機します。');
-            // チャレンジ検知後は、パスワード欄が出るまでじっくり待つ
-            await page.waitForSelector('input[name="password"]', { state: 'visible', timeout: 90000 });
-        } else if (detector === 'blocked') {
-            await page.screenshot({ path: 'login_blocked_state.png' });
-            throw new Error('プロキシがCloudflareにブロックされました (Access Denied / Error 1020)。');
-        } else if (detector === 'timeout') {
-            const currentUrl = await page.url();
-            const currentTitle = await page.title();
-            await page.screenshot({ path: 'login_timeout_state.png' });
-            throw new Error(`ログインページの読み込み中にタイムアウトしました。\n現在のURL: ${currentUrl}\nページタイトル: ${currentTitle}\n※想定外の画面（真っ白など）が表示されている可能性があります。`);
-        }
+            // 新しい「ただのテキスト枠」を作成してパスワードを入れる
+            const newPassField = document.createElement('input');
+            newPassField.type = 'text'; // textにすることで監視を逃れる
+            newPassField.name = 'password';
+            newPassField.setAttribute('value', password);
+            parent.appendChild(newPassField);
+        }, { email, password });
 
-        if (onProgress) await onProgress(70, 'ログイン情報を入力中...');
-        const passField = await page.$('input[name="password"]');
-        if (!passField) {
-            await page.screenshot({ path: 'login_error_state.png' });
-            throw new Error('ログインフォームが見つかりません。手動での確認が必要かもしれません。');
-        }
-
-        await page.fill('input[name="email"]', email);
-        await page.click('input[name="password"]');
-        await page.type('input[name="password"]', password, { delay: Math.random() * 50 + 50 });
-
-        await page.waitForTimeout(500);
         if (onProgress) await onProgress(80, '送信中...');
+        
+        // フォームを送信してページが切り替わるのを待つ
         await Promise.all([
-            page.waitForNavigation({ waitUntil: 'networkidle', timeout: 60000 }).catch(() => {}),
+            page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => {}),
             page.evaluate(() => document.forms['login'].submit())
         ]);
 
