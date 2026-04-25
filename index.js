@@ -296,10 +296,16 @@ async function changeOptifineCape(email, password, mcid, onProgress) {
         if (onProgress) await onProgress(30, 'ログインページへ移動中...');
         await page.goto('https://optifine.net/login', { waitUntil: 'domcontentloaded', timeout: 60000 });
         if (onProgress) await onProgress(50, 'Cloudflareを突破中...');
-        await page.waitForTimeout(5000);
+        await page.waitForTimeout(10000); // 待機時間を10秒に増加
 
         if (onProgress) await onProgress(70, 'ログイン情報を送信中...');
+        console.log('2. ログイン情報を入力中...');
+        
+        // 入力欄が操作可能になるまで待機
+        await page.waitForSelector('input[name="email"]', { state: 'editable', timeout: 60000 });
         await page.fill('input[name="email"]', email);
+        
+        await page.waitForSelector('input[name="password"]', { state: 'editable', timeout: 60000 });
         await page.fill('input[name="password"]', password);
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {}),
