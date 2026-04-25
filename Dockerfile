@@ -1,5 +1,5 @@
-# 1. Playwrightがプリインストールされた公式イメージを使用
-FROM mcr.microsoft.com/playwright:v1.40.0-jammy
+# 互換性の高い ubuntu 20.04 ベースのイメージを使用
+FROM mcr.microsoft.com/playwright:v1.40.0-focal
 
 # 2. 作業ディレクトリを /app に設定
 WORKDIR /app
