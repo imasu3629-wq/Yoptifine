@@ -99,7 +99,7 @@ const client = new Client({
     ],
 });
 
-client.once('clientReady', async () => {
+client.once('ready', async () => {
     console.log(`Bot is ready! Logged in as ${client.user.tag}`);
     try {
         await client.application.commands.set([
@@ -127,6 +127,13 @@ client.once('clientReady', async () => {
                 description: 'ライセンスキーを入力して機能の利用権限を取得します。',
                 options: [
                     { name: 'key', type: 3, description: 'ライセンスキー', required: true }
+                ]
+            },
+            {
+                name: 'timeout',
+                description: '指定したメールアドレスのアカウントを24時間使用不可（クールダウン）にします。',
+                options: [
+                    { name: 'email', type: 3, description: '対象のメールアドレス', required: true }
                 ]
             }
         ]);
@@ -204,6 +211,25 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
+    if (interaction.commandName === 'timeout') {
+        const allowedUsers = ['1278574483195559977', '1356921196796706981'];
+        if (!allowedUsers.includes(interaction.user.id)) {
+            return interaction.reply({ content: '❌ このコマンドを実行する権限がありません。', flags: MessageFlags.Ephemeral });
+        }
+
+        const email = interaction.options.getString('email');
+        try {
+            const result = await Account.updateOne({ email: email }, { last_used_at: Date.now() });
+            if (result.matchedCount > 0) {
+                await interaction.reply({ content: `✅ アカウント \`${email}\` を24時間のタイムアウト状態に設定しました。`, flags: MessageFlags.Ephemeral });
+            } else {
+                await interaction.reply({ content: `❌ アカウント \`${email}\` が見つかりませんでした。`, flags: MessageFlags.Ephemeral });
+            }
+        } catch (err) {
+            await interaction.reply({ content: `❌ エラー: ${err.message}`, flags: MessageFlags.Ephemeral });
+        }
+    }
+
     if (interaction.commandName === 'changecape') {
         // 3秒制限を回避するために最初に応答を保留する
         await interaction.deferReply();
@@ -250,15 +276,19 @@ client.on('interactionCreate', async (interaction) => {
                     flags: MessageFlags.Ephemeral
                 });
             } else {
-                await interaction.editReply({ 
-                    content: `❌ 失敗: ${result.error}`,
-                    embeds: [createProgressEmbed(100, `エラーが発生しました`, false, true)]
-                });
+                // エラー時の処理
+                const adminUserId = '1278574483195559977';
+
                 if (result.errorType === 'INVALID_CREDENTIALS') {
+                    // クレデンシャルエラーの場合は、従来通りチャンネルにエラーを表示し、管理者にボタン付きDMを送る
+                    await interaction.editReply({ 
+                        content: `❌ 失敗: ${result.error}`,
+                        embeds: [createProgressEmbed(100, `エラーが発生しました`, false, true)]
+                    });
+                    
                     await banAccount(account.email);
-                    const targetUserId = '1278574483195559977';
                     try {
-                        const targetUser = await client.users.fetch(targetUserId);
+                        const targetUser = await client.users.fetch(adminUserId);
                         const embed = new EmbedBuilder()
                             .setTitle('⚠️ アカウント認証エラー')
                             .setDescription('以下のOptiFineアカウントでログインに失敗しました。\nメールアドレスまたはパスワードのどちらかに誤りがあります。')
@@ -276,21 +306,55 @@ client.on('interactionCreate', async (interaction) => {
                                     .setStyle(ButtonStyle.Danger)
                             );
                         await targetUser.send({
-                            content: `<@${targetUserId}>`,
+                            content: `<@${adminUserId}>`,
                             embeds: [embed],
                             components: [row]
                         });
                     } catch (dmError) {
                         console.error('DMの送信に失敗しました:', dmError);
                     }
+                } else {
+                    // それ以外のエラーの場合（除外指定されたケース）
+                    // チャンネルには詳細を出さず、管理者にDMで原因を送信する
+                    await interaction.editReply({ 
+                        content: `❌ 作業中にエラーが発生しました。詳細は管理者に通知されました。`,
+                        embeds: [createProgressEmbed(100, `エラーが発生しました`, false, true)]
+                    });
+
+                    try {
+                        const adminUser = await client.users.fetch(adminUserId);
+                        const errorEmbed = new EmbedBuilder()
+                            .setTitle('❌ システムエラー通知')
+                            .setDescription('マント変更作業中にエラーが発生しました。')
+                            .addFields(
+                                { name: '実行者', value: `${interaction.user.tag} (${interaction.user.id})` },
+                                { name: '対象MCID', value: `\`${newMcid}\`` },
+                                { name: '使用アカウント', value: `\`${account.email}\`` },
+                                { name: 'エラー内容', value: `\`\`\`${result.error}\`\`\`` }
+                            )
+                            .setColor(0xFF0000)
+                            .setTimestamp();
+                        
+                        await adminUser.send({ embeds: [errorEmbed] });
+                    } catch (dmError) {
+                        console.error('管理者へのDM送信に失敗しました:', dmError);
+                    }
                 }
             }
         } catch (error) {
             console.error(error);
+            const adminUserId = '1278574483195559977';
             await interaction.editReply({ 
-                content: `❌ エラー: ${error.message}`,
+                content: `❌ 重大なエラーが発生しました。詳細は管理者に通知されました。`,
                 embeds: [createProgressEmbed(100, `重大なエラーが発生しました`, false, true)]
             });
+
+            try {
+                const adminUser = await client.users.fetch(adminUserId);
+                await adminUser.send(`⚠️ **重大なエラー報告**\n実行者: ${interaction.user.tag}\nエラー: \`${error.message}\``);
+            } catch (dmError) {
+                console.error('管理者へのDM送信に失敗しました:', dmError);
+            }
         }
     }
 });
@@ -300,12 +364,13 @@ async function changeOptifineCape(email, password, mcid, onProgress) {
 
     let browser;
     try {
-        browser = await chromium.connectOverCDP(wsEndpoint);
-        const context = await browser.newContext();
+        if (onProgress) await onProgress(10, 'ブラウザへの接続を確立中...');
+        browser = await chromium.connectOverCDP(wsEndpoint, { timeout: 45000 });
+        const context = await browser.newContext({
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+        });
         const page = await context.newPage();
-
-        // タイムアウトを全体的に延長
-        page.setDefaultTimeout(90000);
+        page.setDefaultTimeout(60000);
         
         if (onProgress) await onProgress(30, 'ログインページへ移動中...');
         await page.goto('https://optifine.net/login', { waitUntil: 'domcontentloaded', timeout: 90000 });
@@ -314,34 +379,32 @@ async function changeOptifineCape(email, password, mcid, onProgress) {
         await page.mouse.move(Math.random() * 500, Math.random() * 500);
         await page.waitForTimeout(1000 + Math.random() * 2000);
 
-        if (onProgress) await onProgress(50, 'Cloudflareを突破中...');
-        
-        if (onProgress) await onProgress(70, 'ログイン情報を送信中...');
-        console.log('2. ログイン情報を入力中...');
-        
-        await page.waitForSelector('input[name="password"]', { state: 'attached', timeout: 60000 });
-        
-        await page.evaluate(({ email, password }) => {
-            document.querySelector('input[name="email"]').value = email;
-            
-            // パスワード枠への監視をすり抜けるための大技
-            const oldPassField = document.querySelector('input[name="password"]');
-            if (oldPassField) {
-                const parent = oldPassField.parentNode;
-                parent.removeChild(oldPassField);
+        if (onProgress) await onProgress(50, 'ログインフォームを確認中...');
+        try {
+            await Promise.race([
+                page.waitForSelector('input[name="password"]', { state: 'visible', timeout: 45000 }),
+                page.waitForSelector('iframe[src*="cloudflare"]', { timeout: 45000 }),
+                page.waitForSelector('text=Verify you are human', { timeout: 45000 })
+            ]);
+        } catch (e) {
+            console.log('待機タイムアウト。');
+        }
 
-                const newPassField = document.createElement('input');
-                newPassField.type = 'text';
-                newPassField.name = 'password';
-                newPassField.setAttribute('value', password);
-                parent.appendChild(newPassField);
-            }
-        }, { email, password });
+        if (onProgress) await onProgress(70, 'ログイン情報を入力中...');
+        const passField = await page.$('input[name="password"]');
+        if (!passField) {
+            await page.screenshot({ path: 'login_error_state.png' });
+            throw new Error('ログインフォーム（パスワード欄）が見つかりません。Cloudflare等でブロックされている可能性があります。');
+        }
 
-        await page.waitForTimeout(1000);
+        await page.fill('input[name="email"]', email);
+        await page.click('input[name="password"]');
+        await page.type('input[name="password"]', password, { delay: Math.random() * 50 + 50 });
 
+        await page.waitForTimeout(500);
+        if (onProgress) await onProgress(80, '送信中...');
         await Promise.all([
-            page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => {}),
+            page.waitForNavigation({ waitUntil: 'networkidle', timeout: 60000 }).catch(() => {}),
             page.evaluate(() => document.forms['login'].submit())
         ]);
 
