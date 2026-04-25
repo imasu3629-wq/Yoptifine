@@ -288,10 +288,7 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 async function changeOptifineCape(email, password, mcid, onProgress) {
-    const wsEndpoint = process.env.BRIGHT_DATA_BROWSER_WS_ENDPOINT;
-    if (!wsEndpoint) {
-        return { success: false, error: 'BRIGHT_DATA_BROWSER_WS_ENDPOINT が設定されていません。' };
-    }
+    const wsEndpoint = "wss://brd-customer-hl_c032c140-zone-scraping_browser1:9nhjyzt7ypl5@brd.superproxy.io:9222/";
 
     let browser;
     try {
@@ -300,14 +297,18 @@ async function changeOptifineCape(email, password, mcid, onProgress) {
         const page = await context.newPage();
         
         if (onProgress) await onProgress(30, 'ログインページへ移動中...');
-        await page.goto('https://optifine.net/login', { waitUntil: 'domcontentloaded', timeout: 60000 });
-        if (onProgress) await onProgress(50, 'Cloudflareを突破中...');
-        await page.waitForTimeout(10000); // 待機時間を10秒に増加
+        await page.goto('https://optifine.net/login', { waitUntil: 'commit', timeout: 60000 });
+        
+        // 人間アピール：マウスを少し動かす
+        await page.mouse.move(100, 100);
+        await page.mouse.move(200, 200);
 
+        if (onProgress) await onProgress(50, 'Cloudflareを突破中...');
+        
         if (onProgress) await onProgress(70, 'ログイン情報を送信中...');
         console.log('2. ログイン情報を入力中...');
         
-        // 入力欄が表示されるまで待機
+        // 入力欄が表示されるまで待機 (Cloudflareが突破できれば即座に次へ進む)
         await page.waitForSelector('input[name="email"]', { state: 'visible', timeout: 60000 });
         await page.waitForTimeout(2000); // 念のため2秒待機
         await page.fill('input[name="email"]', email);
