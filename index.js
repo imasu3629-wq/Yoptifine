@@ -1,7 +1,12 @@
-require('dotenv').config();
 const { Client, GatewayIntentBits, MessageFlags, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { chromium } = require('playwright-core');
 const mongoose = require('mongoose');
+const express = require('express');
+
+// --- 軽量Webサーバーの起動 (Koyeb用) ---
+const app = express();
+app.get('/', (req, res) => res.send('Bot is running!'));
+app.listen(8000, () => console.log('🚀 Keep-alive server is listening on port 8000'));
 
 // MongoDBの接続設定
 const MONGODB_URI = "mongodb+srv://imasu3629_db_user:Kai091908@cluster0.t3b7wem.mongodb.net/?appName=Cluster0";
