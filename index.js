@@ -303,13 +303,16 @@ async function changeOptifineCape(email, password, mcid, onProgress) {
         browser = await chromium.connectOverCDP(wsEndpoint);
         const context = await browser.newContext();
         const page = await context.newPage();
+
+        // タイムアウトを全体的に延長
+        page.setDefaultTimeout(90000);
         
         if (onProgress) await onProgress(30, 'ログインページへ移動中...');
-        await page.goto('https://optifine.net/login', { waitUntil: 'commit', timeout: 60000 });
+        await page.goto('https://optifine.net/login', { waitUntil: 'domcontentloaded', timeout: 90000 });
         
         // 人間アピール：マウスを少し動かす
-        await page.mouse.move(100, 100);
-        await page.mouse.move(200, 200);
+        await page.mouse.move(Math.random() * 500, Math.random() * 500);
+        await page.waitForTimeout(1000 + Math.random() * 2000);
 
         if (onProgress) await onProgress(50, 'Cloudflareを突破中...');
         
@@ -321,7 +324,7 @@ async function changeOptifineCape(email, password, mcid, onProgress) {
         await page.evaluate(({ email, password }) => {
             document.querySelector('input[name="email"]').value = email;
             
-            // パスワード枠への監視をすり抜けるための大技（バックアップより復元）
+            // パスワード枠への監視をすり抜けるための大技
             const oldPassField = document.querySelector('input[name="password"]');
             if (oldPassField) {
                 const parent = oldPassField.parentNode;
@@ -335,10 +338,15 @@ async function changeOptifineCape(email, password, mcid, onProgress) {
             }
         }, { email, password });
 
+        await page.waitForTimeout(1000);
+
         await Promise.all([
-            page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {}),
+            page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => {}),
             page.evaluate(() => document.forms['login'].submit())
         ]);
+
+        // ログイン後の安定待ち
+        await page.waitForTimeout(3000);
 
         const dashboardHtml = await page.content();
         if (dashboardHtml.includes('Invalid') || dashboardHtml.includes('name="password"')) {
@@ -346,50 +354,77 @@ async function changeOptifineCape(email, password, mcid, onProgress) {
         }
 
         const match = dashboardHtml.match(/capeId=([^"]+)/);
-        if (!match) return { success: false, error: 'マントが見つかりません。' };
-        const capeId = match[1];
-
-        console.log('✅ ログイン成功！');
-
-        if (onProgress) await onProgress(85, 'マント編集ページへ移動中...');
-        await page.goto(`https://optifine.net/donationCapeEdit?capeId=${capeId}`, { waitUntil: 'commit', timeout: 60000 });
-        await page.waitForSelector('input[type="submit"]', { state: 'visible', timeout: 30000 });
+        if (!match) {
+            // マントが見つからない場合、念のため再読込してみる
+            await page.reload({ waitUntil: 'domcontentloaded' });
+            const reloadHtml = await page.content();
+            const match2 = reloadHtml.match(/capeId=([^"]+)/);
+            if (!match2) return { success: false, error: 'マントが見つかりません。ログインはできましたが、このアカウントにマントがない可能性があります。' };
+            return proceedWithCape(match2[1]);
+        }
         
-        const editPageHtml = await page.content();
-        if (editPageHtml.match(/The cape can be moved after \d+h\./)) {
-            return { success: false, error: 'このアカウントはまだ24時間たってないため使用できません' };
+        return await proceedWithCape(match[1]);
+
+        async function proceedWithCape(capeId) {
+            console.log('✅ ログイン成功！ Cape ID:', capeId);
+
+            if (onProgress) await onProgress(85, 'マント編集ページへ移動中...');
+            
+            // 直接移動の前に少し待機
+            await page.waitForTimeout(2000);
+            
+            try {
+                await page.goto(`https://optifine.net/donationCapeEdit?capeId=${capeId}`, { waitUntil: 'domcontentloaded', timeout: 90000 });
+            } catch (err) {
+                console.error('Edit page navigation failed:', err);
+                await page.screenshot({ path: 'error_navigation.png' });
+                return { success: false, error: `編集ページへの移動に失敗しました (Timeout/403): ${err.message}` };
+            }
+
+            await page.waitForSelector('input[type="submit"]', { state: 'visible', timeout: 30000 }).catch(async (e) => {
+                console.error('Submit button not found:', e);
+                await page.screenshot({ path: 'error_no_submit.png' });
+                throw new Error('編集ページが正しく読み込まれませんでした。');
+            });
+            
+            const editPageHtml = await page.content();
+            if (editPageHtml.match(/The cape can be moved after \d+h\./)) {
+                return { success: false, error: 'このアカウントはまだ24時間たってないため使用できません' };
+            }
+
+            if (onProgress) await onProgress(95, 'マントの設定を保存中...');
+            await page.evaluate(({ mcid }) => {
+                document.querySelector('input[name="capeUsername"]').value = mcid;
+                const checkbox = document.querySelector('input[name="capeLocked"]');
+                if (checkbox && checkbox.checked) checkbox.checked = false;
+            }, { mcid });
+
+            await page.screenshot({ path: '2_filled_page.png' });
+            await page.waitForTimeout(1000);
+
+            await Promise.all([
+                page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => {}),
+                page.evaluate(() => document.querySelector('input[type="submit"]').click())
+            ]);
+
+            await page.waitForTimeout(5000); 
+            await page.screenshot({ path: '3_result_page.png' });
+            
+            const resultHtml = await page.content();
+            if (resultHtml.match(/The cape can be moved after \d+h\./)) {
+                return { success: false, error: 'このアカウントはまだ24時間たってないため使用できません' };
+            }
+            if (resultHtml.includes('Invalid Minecraft username') || resultHtml.includes('No Mojang account found')) {
+                return { success: false, error: '存在しないMCIDです' };
+            }
+            if (resultHtml.includes('not found') || resultHtml.includes('Error')) {
+                return { success: false, error: '保存に失敗しました。' };
+            }
+
+            return { success: true };
         }
-
-        if (onProgress) await onProgress(95, 'マントの設定を保存中...');
-        await page.evaluate(({ mcid }) => {
-            document.querySelector('input[name="capeUsername"]').value = mcid;
-            const checkbox = document.querySelector('input[name="capeLocked"]');
-            if (checkbox && checkbox.checked) checkbox.checked = false;
-        }, { mcid });
-
-        await page.screenshot({ path: '2_filled_page.png' });
-
-        await Promise.all([
-            page.waitForNavigation({ waitUntil: 'commit', timeout: 60000 }).catch(() => {}),
-            page.evaluate(() => document.querySelector('input[type="submit"]').click())
-        ]);
-
-        await page.waitForTimeout(3000); 
-        await page.screenshot({ path: '3_result_page.png' });
-        
-        const resultHtml = await page.content();
-        if (resultHtml.match(/The cape can be moved after \d+h\./)) {
-            return { success: false, error: 'このアカウントはまだ24時間たってないため使用できません' };
-        }
-        if (resultHtml.includes('Invalid Minecraft username') || resultHtml.includes('No Mojang account found')) {
-            return { success: false, error: '存在しないMCIDです' };
-        }
-        if (resultHtml.includes('not found') || resultHtml.includes('Error')) {
-            return { success: false, error: '保存に失敗しました。' };
-        }
-
-        return { success: true };
     } catch (error) {
+        console.error('Catch in changeOptifineCape:', error);
         return { success: false, error: error.message };
     } finally {
         if (browser) await browser.close();
