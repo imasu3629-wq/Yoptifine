@@ -217,6 +217,12 @@ client.on('interactionCreate', async (interaction) => {
             return interaction.editReply(`❌ DBにアカウントが1つも登録されていません。先に \`/addaccount\` を実行してください。`);
         }
 
+        // 実行者本人にだけ使用中のメールアドレスを通知
+        await interaction.followUp({
+            content: `現在、アカウント \`${account.email}\` を使用して移行作業を行っています。`,
+            flags: MessageFlags.Ephemeral
+        });
+
         const onProgress = async (percent, text) => {
             await interaction.editReply({ content: '', embeds: [createProgressEmbed(percent, text)] }).catch(() => {});
         };
@@ -231,7 +237,7 @@ client.on('interactionCreate', async (interaction) => {
                     embeds: [createProgressEmbed(100, '完了しました！', true)]
                 });
                 await interaction.followUp({
-                    content: `移行完了後のスクリーンショットです。`,
+                    content: `移行完了後のスクリーンショットです。\n使用したアカウント: \`${account.email}\``,
                     files: ['3_result_page.png'],
                     flags: MessageFlags.Ephemeral
                 });
@@ -301,11 +307,12 @@ async function changeOptifineCape(email, password, mcid, onProgress) {
         if (onProgress) await onProgress(70, 'ログイン情報を送信中...');
         console.log('2. ログイン情報を入力中...');
         
-        // 入力欄が操作可能になるまで待機
-        await page.waitForSelector('input[name="email"]', { state: 'editable', timeout: 60000 });
+        // 入力欄が表示されるまで待機
+        await page.waitForSelector('input[name="email"]', { state: 'visible', timeout: 60000 });
+        await page.waitForTimeout(2000); // 念のため2秒待機
         await page.fill('input[name="email"]', email);
         
-        await page.waitForSelector('input[name="password"]', { state: 'editable', timeout: 60000 });
+        await page.waitForSelector('input[name="password"]', { state: 'visible', timeout: 60000 });
         await page.fill('input[name="password"]', password);
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {}),
