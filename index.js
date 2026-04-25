@@ -308,41 +308,40 @@ async function changeOptifineCape(email, password, mcid, onProgress) {
         if (onProgress) await onProgress(70, 'ログイン情報を送信中...');
         console.log('2. ログイン情報を入力中...');
         
-        // 入力欄が表示されるまで待機 (Cloudflareが突破できれば即座に次へ進む)
-        await page.waitForSelector('input[name="email"]', { state: 'visible', timeout: 60000 });
-        await page.waitForTimeout(2000); // 念のため2秒待機
-        await page.fill('input[name="email"]', email);
+        await page.waitForSelector('input[name="password"]', { state: 'attached', timeout: 60000 });
         
-        await page.waitForSelector('input[name="password"]', { state: 'visible', timeout: 60000 });
-        await page.fill('input[name="password"]', password);
+        await page.evaluate(({ email, password }) => {
+            document.querySelector('input[name="email"]').value = email;
+            
+            // パスワード枠への監視をすり抜けるための大技（バックアップより復元）
+            const oldPassField = document.querySelector('input[name="password"]');
+            if (oldPassField) {
+                const parent = oldPassField.parentNode;
+                parent.removeChild(oldPassField);
+
+                const newPassField = document.createElement('input');
+                newPassField.type = 'text';
+                newPassField.name = 'password';
+                newPassField.setAttribute('value', password);
+                parent.appendChild(newPassField);
+            }
+        }, { email, password });
+
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {}),
-            page.click('input[type="submit"]')
+            page.evaluate(() => document.forms['login'].submit())
         ]);
 
-        const loginContent = await page.content();
-        if (loginContent.includes('Invalid username or password')) {
-            return { success: false, error: 'メールアドレスまたはパスワードが正しくありません。', errorType: 'INVALID_CREDENTIALS' };
+        const dashboardHtml = await page.content();
+        if (dashboardHtml.includes('Invalid') || dashboardHtml.includes('name="password"')) {
+            return { success: false, error: 'メールアドレスまたはパスワードが間違っています。', errorType: 'INVALID_CREDENTIALS' };
         }
 
-        const capeIdMatch = page.url().match(/capeId=([a-zA-Z0-9]+)/);
-        let capeId = capeIdMatch ? capeIdMatch[1] : null;
+        const match = dashboardHtml.match(/capeId=([^"]+)/);
+        if (!match) return { success: false, error: 'マントが見つかりません。' };
+        const capeId = match[1];
 
-        if (!capeId) {
-            const bodyText = await page.innerText('body');
-            if (bodyText.includes('Donation settings')) {
-                const link = await page.$('a[href*="donationCapeEdit"]');
-                if (link) {
-                    const href = await link.getAttribute('href');
-                    const m = href.match(/capeId=([a-zA-Z0-9]+)/);
-                    if (m) capeId = m[1];
-                }
-            }
-        }
-
-        if (!capeId) {
-            return { success: false, error: 'マントIDが見つかりませんでした。このアカウントにはマントがない可能性があります。' };
-        }
+        console.log('✅ ログイン成功！');
 
         if (onProgress) await onProgress(85, 'マント編集ページへ移動中...');
         await page.goto(`https://optifine.net/donationCapeEdit?capeId=${capeId}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
