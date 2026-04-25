@@ -2,12 +2,6 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, MessageFlags, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { chromium } = require('playwright-core');
 const mongoose = require('mongoose');
-let sqlite3;
-try {
-    sqlite3 = require('sqlite3').verbose();
-} catch (e) {
-    console.log('⚠️ SQLite3 がロードできませんでした。移行処理をスキップします。');
-}
 
 // MongoDBの接続設定
 const MONGODB_URI = "mongodb+srv://imasu3629_db_user:Kai091908@cluster0.t3b7wem.mongodb.net/?appName=Cluster0";
@@ -17,15 +11,13 @@ mongoose.connect(MONGODB_URI)
 
 // --- スキーマ定義 ---
 
-// アカウント情報のスキーマ
 const accountSchema = new mongoose.Schema({
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
-    last_used_at: { type: Number, default: null } // 9999999999999 はBAN状態
+    last_used_at: { type: Number, default: null } 
 });
 const Account = mongoose.model('Account', accountSchema);
 
-// ライセンス許可ユーザーのスキーマ
 const allowedUserSchema = new mongoose.Schema({
     user_id: { type: String, required: true, unique: true }
 });
@@ -33,12 +25,9 @@ const AllowedUser = mongoose.model('AllowedUser', allowedUserSchema);
 
 // --- ユーティリティ関数 ---
 
-// 利用可能なアカウントをDBから取得する関数
 async function getAvailableAccount() {
     try {
         const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
-        
-        // 1. まず「24時間以上使われていない（または未使用の）」かつBANされていないアカウントを取得
         let accounts = await Account.find({
             $or: [
                 { last_used_at: null },
@@ -47,11 +36,9 @@ async function getAvailableAccount() {
         });
 
         if (accounts.length > 0) {
-            // ランダムに1つ選ぶ
             return accounts[Math.floor(Math.random() * accounts.length)];
         }
 
-        // 2. もし全部が24時間以内に使われていた場合、一番最後に使われた日時が古いもの（BANされていないもの）を取得
         const oldestAccount = await Account.findOne({
             last_used_at: { $ne: 9999999999999 }
         }).sort({ last_used_at: 1 });
@@ -63,23 +50,19 @@ async function getAvailableAccount() {
     }
 }
 
-// 使用したアカウントの最終利用時間を更新する関数
 async function updateLastUsed(email) {
     await Account.updateOne({ email: email }, { last_used_at: Date.now() });
 }
 
-// ユーザーにライセンスがあるか確認する関数
 async function checkUserAllowed(userId) {
     const user = await AllowedUser.findOne({ user_id: userId });
     return !!user;
 }
 
-// アカウントを使用不可（BAN状態）にする関数
 async function banAccount(email) {
     await Account.updateOne({ email: email }, { last_used_at: 9999999999999 });
 }
 
-// 進捗ゲージ用Embedを作成する関数
 function createProgressEmbed(percent, statusText, isDone = false, isError = false) {
     const barLength = 10;
     const filledLength = Math.round((percent / 100) * barLength);
@@ -113,45 +96,6 @@ const client = new Client({
 
 client.once('clientReady', async () => {
     console.log(`Bot is ready! Logged in as ${client.user.tag}`);
-    
-    // --- 移行用コード（一度実行したら削除してOK） ---
-    if (sqlite3) {
-        console.log('🔄 SQLiteからMongoDBへのデータ移行を開始します...');
-        try {
-            const db = new sqlite3.Database('./accounts.db');
-            
-            // アカウントの移行
-            db.all("SELECT * FROM accounts", [], async (err, rows) => {
-                if (err) return console.error('SQLite読み込みエラー(accounts):', err);
-                for (const row of rows) {
-                    await Account.findOneAndUpdate(
-                        { email: row.email },
-                        { password: row.password, last_used_at: row.last_used_at },
-                        { upsert: true }
-                    );
-                }
-                console.log(`✅ アカウント情報を ${rows.length} 件移行しました。`);
-            });
-
-            // 許可ユーザーの移行
-            db.all("SELECT * FROM allowed_users", [], async (err, rows) => {
-                if (err) return console.error('SQLite読み込みエラー(allowed_users):', err);
-                for (const row of rows) {
-                    await AllowedUser.findOneAndUpdate(
-                        { user_id: row.user_id },
-                        { user_id: row.user_id },
-                        { upsert: true }
-                    );
-                }
-                console.log(`✅ 許可ユーザー情報を ${rows.length} 件移行しました。`);
-                db.close(); 
-            });
-        } catch (e) {
-            console.error('移行処理中にエラーが発生しました:', e);
-        }
-    }
-    // --- 移行用コード終了 ---
-
     try {
         await client.application.commands.set([
             {
@@ -188,11 +132,9 @@ client.once('clientReady', async () => {
 });
 
 client.on('interactionCreate', async (interaction) => {
-    // ボタンのインタラクション処理
     if (interaction.isButton()) {
         if (interaction.customId.startsWith('delete_account_')) {
             const emailToDelete = interaction.customId.replace('delete_account_', '');
-            
             try {
                 const result = await Account.deleteOne({ email: emailToDelete });
                 if (result.deletedCount > 0) {
@@ -233,9 +175,6 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === 'listaccounts') {
         try {
             const count = await Account.countDocuments();
-            if (count === 0) {
-                return interaction.reply({ content: '登録されているアカウントがありません。`/addaccount` で登録してください。', flags: MessageFlags.Ephemeral });
-            }
             await interaction.reply({ content: `追加されているアカウント数: ${count}件`, flags: MessageFlags.Ephemeral });
         } catch (err) {
             await interaction.reply({ content: `❌ エラー: ${err.message}`, flags: MessageFlags.Ephemeral });
@@ -244,7 +183,6 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.commandName === 'redeem') {
         const key = interaction.options.getString('key');
-        
         if (key.toLowerCase() === 'haruisdef') {
             try {
                 await AllowedUser.findOneAndUpdate(
@@ -272,7 +210,6 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         const newMcid = interaction.options.getString('mcid');
-
         await interaction.reply({ content: `🔍 DBから利用可能なアカウントを探しています...` });
 
         const account = await getAvailableAccount();
@@ -287,14 +224,12 @@ client.on('interactionCreate', async (interaction) => {
         try {
             await onProgress(10, 'ブラウザを起動中...');
             const result = await changeOptifineCape(account.email, account.password, newMcid, onProgress);
-            
             if (result.success) {
                 await updateLastUsed(account.email); 
                 await interaction.editReply({ 
                     content: `✅ 成功！マントを \`${newMcid}\` に移動しました。`,
                     embeds: [createProgressEmbed(100, '完了しました！', true)]
                 });
-                
                 await interaction.followUp({
                     content: `移行完了後のスクリーンショットです。`,
                     files: ['3_result_page.png'],
@@ -305,14 +240,11 @@ client.on('interactionCreate', async (interaction) => {
                     content: `❌ 失敗: ${result.error}`,
                     embeds: [createProgressEmbed(100, `エラーが発生しました`, false, true)]
                 });
-                
                 if (result.errorType === 'INVALID_CREDENTIALS') {
                     await banAccount(account.email);
-                    
                     const targetUserId = '1278574483195559977';
                     try {
                         const targetUser = await client.users.fetch(targetUserId);
-                        
                         const embed = new EmbedBuilder()
                             .setTitle('⚠️ アカウント認証エラー')
                             .setDescription('以下のOptiFineアカウントでログインに失敗しました。\nメールアドレスまたはパスワードのどちらかに誤りがあります。')
@@ -322,7 +254,6 @@ client.on('interactionCreate', async (interaction) => {
                             )
                             .setColor(0xFF0000)
                             .setTimestamp();
-                            
                         const row = new ActionRowBuilder()
                             .addComponents(
                                 new ButtonBuilder()
@@ -330,7 +261,6 @@ client.on('interactionCreate', async (interaction) => {
                                     .setLabel('アカウント情報を消しますか')
                                     .setStyle(ButtonStyle.Danger)
                             );
-                            
                         await targetUser.send({
                             content: `<@${targetUserId}>`,
                             embeds: [embed],
@@ -351,10 +281,6 @@ client.on('interactionCreate', async (interaction) => {
     }
 });
 
-// ============================================================
-// OptiFineのマント変更処理 (Scraping Browser版)
-// ============================================================
-
 async function changeOptifineCape(email, password, mcid, onProgress) {
     const wsEndpoint = process.env.BRIGHT_DATA_BROWSER_WS_ENDPOINT;
     if (!wsEndpoint) {
@@ -368,18 +294,13 @@ async function changeOptifineCape(email, password, mcid, onProgress) {
         const page = await context.newPage();
         
         if (onProgress) await onProgress(30, 'ログインページへ移動中...');
-        console.log('1. ログインページへ移動中...');
         await page.goto('https://optifine.net/login', { waitUntil: 'domcontentloaded', timeout: 60000 });
-
-        // Cloudflare等のチェックを待つ
         if (onProgress) await onProgress(50, 'Cloudflareを突破中...');
         await page.waitForTimeout(5000);
 
         if (onProgress) await onProgress(70, 'ログイン情報を送信中...');
-        console.log('2. ログイン情報を入力中...');
         await page.fill('input[name="email"]', email);
         await page.fill('input[name="password"]', password);
-        
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {}),
             page.click('input[type="submit"]')
@@ -387,7 +308,6 @@ async function changeOptifineCape(email, password, mcid, onProgress) {
 
         const loginContent = await page.content();
         if (loginContent.includes('Invalid username or password')) {
-            console.log('❌ ログイン失敗: メールアドレスまたはパスワードが違います');
             return { success: false, error: 'メールアドレスまたはパスワードが正しくありません。', errorType: 'INVALID_CREDENTIALS' };
         }
 
@@ -410,8 +330,6 @@ async function changeOptifineCape(email, password, mcid, onProgress) {
             return { success: false, error: 'マントIDが見つかりませんでした。このアカウントにはマントがない可能性があります。' };
         }
 
-        console.log('✅ ログイン成功！');
-        
         if (onProgress) await onProgress(85, 'マント編集ページへ移動中...');
         await page.goto(`https://optifine.net/donationCapeEdit?capeId=${capeId}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
         await page.waitForSelector('input[type="submit"]', { state: 'visible', timeout: 30000 });
@@ -432,29 +350,21 @@ async function changeOptifineCape(email, password, mcid, onProgress) {
         await page.screenshot({ path: '3_result_page.png' });
         
         const resultHtml = await page.content();
-        
         if (resultHtml.match(/The cape can be moved after \d+h\./)) {
             return { success: false, error: 'このアカウントはまだ24時間たってないため使用できません' };
         }
-        
         if (resultHtml.includes('Invalid Minecraft username') || resultHtml.includes('No Mojang account found')) {
             return { success: false, error: '存在しないMCIDです' };
         }
-
         if (resultHtml.includes('not found') || resultHtml.includes('Error')) {
             return { success: false, error: '保存に失敗しました。' };
         }
 
-        console.log('✅ 処理完了！');
         return { success: true };
-
     } catch (error) {
-        console.error('エラー:', error);
         return { success: false, error: error.message };
     } finally {
-        if (browser) {
-            await browser.close();
-        }
+        if (browser) await browser.close();
     }
 }
 
