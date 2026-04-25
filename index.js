@@ -2,6 +2,7 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, MessageFlags, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { chromium } = require('playwright-core');
 const mongoose = require('mongoose');
+const sqlite3 = require('sqlite3').verbose();
 
 // MongoDBの接続設定
 const MONGODB_URI = "mongodb+srv://imasu3629_db_user:Kai091908@cluster0.t3b7wem.mongodb.net/?appName=Cluster0";
@@ -107,6 +108,39 @@ const client = new Client({
 
 client.once('clientReady', async () => {
     console.log(`Bot is ready! Logged in as ${client.user.tag}`);
+    
+    // --- 移行用コード（一度実行したら削除してOK） ---
+    console.log('🔄 SQLiteからMongoDBへのデータ移行を開始します...');
+    const db = new sqlite3.Database('./accounts.db');
+    
+    // アカウントの移行
+    db.all("SELECT * FROM accounts", [], async (err, rows) => {
+        if (err) return console.error('SQLite読み込みエラー(accounts):', err);
+        for (const row of rows) {
+            await Account.findOneAndUpdate(
+                { email: row.email },
+                { password: row.password, last_used_at: row.last_used_at },
+                { upsert: true }
+            );
+        }
+        console.log(`✅ アカウント情報を ${rows.length} 件移行しました。`);
+    });
+
+    // 許可ユーザーの移行
+    db.all("SELECT * FROM allowed_users", [], async (err, rows) => {
+        if (err) return console.error('SQLite読み込みエラー(allowed_users):', err);
+        for (const row of rows) {
+            await AllowedUser.findOneAndUpdate(
+                { user_id: row.user_id },
+                { user_id: row.user_id },
+                { upsert: true }
+            );
+        }
+        console.log(`✅ 許可ユーザー情報を ${rows.length} 件移行しました。`);
+        db.close(); // SQLite接続を閉じる
+    });
+    // --- 移行用コード終了 ---
+
     try {
         await client.application.commands.set([
             {
