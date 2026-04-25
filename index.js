@@ -379,22 +379,29 @@ async function changeOptifineCape(email, password, mcid, onProgress) {
         await page.mouse.move(Math.random() * 500, Math.random() * 500);
         await page.waitForTimeout(1000 + Math.random() * 2000);
 
-        if (onProgress) await onProgress(50, 'ログインフォームを確認中...');
-        try {
-            await Promise.race([
-                page.waitForSelector('input[name="password"]', { state: 'visible', timeout: 45000 }),
-                page.waitForSelector('iframe[src*="cloudflare"]', { timeout: 45000 }),
-                page.waitForSelector('text=Verify you are human', { timeout: 45000 })
-            ]);
-        } catch (e) {
-            console.log('待機タイムアウト。');
+        if (onProgress) await onProgress(50, 'ページの状態を確認中...');
+        const detector = await Promise.race([
+            page.waitForSelector('input[name="password"]', { state: 'visible', timeout: 45000 }).then(() => 'form'),
+            page.waitForSelector('iframe[src*="cloudflare"]', { timeout: 45000 }).then(() => 'challenge'),
+            page.waitForSelector('text=Verify you are human', { timeout: 45000 }).then(() => 'challenge'),
+            page.waitForSelector('div[id*="turnstile"]', { timeout: 45000 }).then(() => 'challenge')
+        ]).catch(() => 'timeout');
+
+        if (detector === 'challenge') {
+            if (onProgress) await onProgress(60, 'Cloudflare認証を待機中...');
+            console.log('Cloudflareチャレンジを検知しました。突破を待機します。');
+            // チャレンジ検知後は、パスワード欄が出るまでじっくり待つ
+            await page.waitForSelector('input[name="password"]', { state: 'visible', timeout: 90000 });
+        } else if (detector === 'timeout') {
+            await page.screenshot({ path: 'login_timeout_state.png' });
+            throw new Error('ログインページの読み込み中にタイムアウトしました。ページが正常に表示されていない可能性があります。');
         }
 
         if (onProgress) await onProgress(70, 'ログイン情報を入力中...');
         const passField = await page.$('input[name="password"]');
         if (!passField) {
             await page.screenshot({ path: 'login_error_state.png' });
-            throw new Error('ログインフォーム（パスワード欄）が見つかりません。Cloudflare等でブロックされている可能性があります。');
+            throw new Error('ログインフォームが見つかりません。手動での確認が必要かもしれません。');
         }
 
         await page.fill('input[name="email"]', email);
