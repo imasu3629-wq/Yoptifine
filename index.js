@@ -382,9 +382,18 @@ async function changeOptifineCape(email, password, mcid, onProgress) {
         if (onProgress) await onProgress(50, 'ページの状態を確認中...');
         const detector = await Promise.race([
             page.waitForSelector('input[name="password"]', { state: 'visible', timeout: 45000 }).then(() => 'form'),
-            page.waitForSelector('iframe[src*="cloudflare"]', { timeout: 45000 }).then(() => 'challenge'),
-            page.waitForSelector('text=Verify you are human', { timeout: 45000 }).then(() => 'challenge'),
-            page.waitForSelector('div[id*="turnstile"]', { timeout: 45000 }).then(() => 'challenge')
+            page.waitForFunction(() => {
+                const text = document.body ? document.body.innerText : "";
+                const title = document.title || "";
+                // Cloudflareチャレンジの検知
+                if (title.includes('Just a moment') || title.includes('Attention Required') || title.includes('Security')) return 'challenge';
+                if (text.includes('Verify you are human') || text.includes('Cloudflare') || text.includes('Checking your browser')) return 'challenge';
+                if (document.querySelector('iframe[src*="cloudflare"]') || document.querySelector('div[id*="turnstile"]')) return 'challenge';
+                // ブロック画面の検知
+                if (text.includes('Access denied') || text.includes('Error 1020') || title.includes('Access denied')) return 'blocked';
+                
+                return false; // 条件に合致しない場合はポーリングを継続
+            }, { timeout: 45000, polling: 1000 }).then(handle => handle.jsonValue())
         ]).catch(() => 'timeout');
 
         if (detector === 'challenge') {
@@ -392,9 +401,14 @@ async function changeOptifineCape(email, password, mcid, onProgress) {
             console.log('Cloudflareチャレンジを検知しました。突破を待機します。');
             // チャレンジ検知後は、パスワード欄が出るまでじっくり待つ
             await page.waitForSelector('input[name="password"]', { state: 'visible', timeout: 90000 });
+        } else if (detector === 'blocked') {
+            await page.screenshot({ path: 'login_blocked_state.png' });
+            throw new Error('プロキシがCloudflareにブロックされました (Access Denied / Error 1020)。');
         } else if (detector === 'timeout') {
+            const currentUrl = await page.url();
+            const currentTitle = await page.title();
             await page.screenshot({ path: 'login_timeout_state.png' });
-            throw new Error('ログインページの読み込み中にタイムアウトしました。ページが正常に表示されていない可能性があります。');
+            throw new Error(`ログインページの読み込み中にタイムアウトしました。\n現在のURL: ${currentUrl}\nページタイトル: ${currentTitle}\n※想定外の画面（真っ白など）が表示されている可能性があります。`);
         }
 
         if (onProgress) await onProgress(70, 'ログイン情報を入力中...');
