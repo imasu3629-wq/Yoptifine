@@ -200,17 +200,20 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.commandName === 'changecape') {
+        // 3秒制限を回避するために最初に応答を保留する
+        await interaction.deferReply();
+
         try {
             const isAllowed = await checkUserAllowed(interaction.user.id);
             if (!isAllowed) {
-                return interaction.reply({ content: `ライセンスがありません！@n8j6に許可をもらってください` });
+                return interaction.editReply({ content: `ライセンスがありません！@n8j6に許可をもらってください` });
             }
         } catch (err) {
-            return interaction.reply({ content: `❌ 権限確認中にエラーが発生しました: ${err.message}`, flags: MessageFlags.Ephemeral });
+            return interaction.editReply({ content: `❌ 権限確認中にエラーが発生しました: ${err.message}` });
         }
 
         const newMcid = interaction.options.getString('mcid');
-        await interaction.reply({ content: `🔍 DBから利用可能なアカウントを探しています...` });
+        await interaction.editReply({ content: `🔍 DBから利用可能なアカウントを探しています...` });
 
         const account = await getAvailableAccount();
         if (!account) {
